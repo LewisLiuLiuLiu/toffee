@@ -1247,15 +1247,14 @@ class Bundle(MObject):
         """
 
         self._dummy_signal = DummySignal()
+        error_connected_signals = set()
 
         for signal in self.current_level_signals:
             if signal not in connected_signals:
                 rule_string = Bundle.__get_rule_string(rule_stack, signal)
-                warning(
-                    f'The signal that can be connected to "{Bundle.__appended_level_string(level_string, signal)}" '
-                    f'is not found in dut, it should satisfy rule "{rule_string}"'
-                )
-
+                error_connected_signals.add((
+                    str(Bundle.__appended_level_string(level_string, signal)), rule_string
+                ))
                 if unconnected_signal_access:
                     setattr(self, signal, self._dummy_signal)
 
@@ -1266,13 +1265,16 @@ class Bundle(MObject):
                     level_string = Bundle.__appended_level_string(
                         level_string, f"{signal_list_name}[{idx}]"
                     )
-                    warning(
-                        f'The signal that can be connected to "{level_string}" '
-                        f'is not found in dut, it should satisfy rule "{rule_string}"'
-                    )
-
+                    error_connected_signals.add((
+                        level_string, rule_string
+                    ))
                     if unconnected_signal_access:
                         signal_list.signals[idx] = self._dummy_signal
+
+        if len(error_connected_signals) > 0:
+            error_message = f"Signal bind error, the following signals in bundle {self.__class__.__name__} are not found in dut, make sure the connection rules are correct (signal_name -> search_rule_in_dut): "
+            error_message += ",".join([f"{a} -> {b}" for a, b in error_connected_signals])
+            raise Exception(error_message)
 
     def __remove_signal_attr(self, signal_name):
         """
