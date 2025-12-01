@@ -136,6 +136,9 @@ class BundleList:
         for i, bundle in enumerate(self.bundles):
             bundle.assign(value[i], multilevel)
 
+    def __len__(self):
+        return len(self.bundles)
+
     def __getitem__(self, key):
         return self.bundles[key]
 
