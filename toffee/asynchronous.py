@@ -158,7 +158,7 @@ Using the asynchronous event logic defined above, the external asynchronous inte
 """
 
 
-async def __clock_loop(dut):
+async def __clock_loop(simulator):
     """
     The clock loop function, which is the main loop of the asynchronous event.
     """
@@ -169,40 +169,53 @@ async def __clock_loop(dut):
 
     while True:
         await execute_all_coros()
-        dut.Step(1)
-        dut.event.set()
-        dut.event.clear()
+        simulator.step(1)
+        simulator.tick()
 
 
 create_task = asyncio.create_task
 
 
-def start_clock(dut):
+def start_clock(simulator):
     """
-    Start a clock loop on a DUT.
-    """
-    # When start_clock is called, global_clock_event points to the clock event in the dut
-    loop = asyncio.get_event_loop()
-    loop.global_clock_event = dut.event
+    Start a clock loop on a simulator.
 
-    task = create_task(__clock_loop(dut))
+    Backward compatibility: if a legacy DUT object is passed, wrap it in DigitalSimulator.
+    """
+    if not hasattr(simulator, "clock_event"):
+        from .digital_simulator import DigitalSimulator
+        simulator = DigitalSimulator(simulator)
+
+    # When start_clock is called, global_clock_event points to the clock event in the simulator
+    loop = asyncio.get_event_loop()
+    loop.global_clock_event = simulator.clock_event
+
+    task = create_task(__clock_loop(simulator))
     task.set_name("__clock_loop")
 
 
-def set_clock_event(dut, loop):
+def set_clock_event(simulator, loop):
     """
-    Set the clock event for the DUT.
+    Set the clock event for the simulator.
 
     In earlier versions of python, the original Event definition cannot be used in the new event loop.
     """
 
     new_event = asyncio.Event(loop=loop)
-    dut.xclock._step_event = new_event
-    dut.event = new_event
 
-    for xpin_info in Bundle.dut_all_signals(dut):
-        xpin = xpin_info["signal"]
-        xpin.event = new_event
+    # Only patch picker DUT internals when wrapping a digital backend
+    dut = getattr(simulator, "dut", None)
+    if dut is not None:
+        dut.xclock._step_event = new_event
+        dut.event = new_event
+
+        for xpin_info in Bundle.dut_all_signals(dut):
+            xpin = xpin_info["signal"]
+            xpin.event = new_event
+
+    # Also update the simulator's event reference if it uses a plain Event
+    if hasattr(simulator, "_event"):
+        simulator._event = new_event
 
 
 def handle_exception(loop, context):
@@ -261,7 +274,7 @@ async def main_coro(test, env_handle=None):
     return ret
 
 
-def run(test, env_handle=None, dut=None):
+def run(test, env_handle=None, dut=None, simulator=None):
     """
     Start the asynchronous event loop and run the coroutine.
 
@@ -271,11 +284,17 @@ def run(test, env_handle=None, dut=None):
                 env_handle is provided, the test will be called with the env_handle's return value. when the env_handle
                 is set, make sure the test is a function and has the same number of arguments as the env_handle's
                 return.
-        dut: The DUT object.
+        dut: The DUT object (legacy parameter, will be wrapped in DigitalSimulator).
+        simulator: The Simulator instance to drive the event loop.
 
     Returns:
         The result of the coroutine (or function).
     """
+
+    # Backward compatibility: wrap legacy dut in DigitalSimulator
+    if simulator is None and dut is not None:
+        from .digital_simulator import DigitalSimulator
+        simulator = DigitalSimulator(dut)
 
     coro = main_coro(test, env_handle)
 
@@ -283,11 +302,11 @@ def run(test, env_handle=None, dut=None):
         return asyncio.run(coro)
 
     assert (
-        dut is not None
-    ), "Your current version of python is less than 3.10.1, need to provide the dut parameter"
+        simulator is not None
+    ), "Your current version of python is less than 3.10.1, need to provide the dut or simulator parameter"
 
     loop = asyncio.get_event_loop()
-    set_clock_event(dut, loop)
+    set_clock_event(simulator, loop)
     result = loop.run_until_complete(coro)
     return result
 

@@ -1145,18 +1145,25 @@ class Bundle(MObject):
         self.__update_signal_info(signal)
         info(f'dut\'s signal "{info_dut_name}" is connected to "{info_bundle_name}"')
 
+    def set_clock_event(self, event):
+        """Explicitly set the clock event for this bundle and all sub-bundles."""
+        self.__clock_event = event
+        for sub_bundle_name, sub_bundle in self.__all_sub_bundles():
+            sub_bundle.set_clock_event(event)
+
     def __update_signal_info(self, signal):
         """
         Update the signal info when a signal is connected to the bundle.
         """
 
-        if self.__clock_event is None:
+        if self.__clock_event is None and hasattr(signal, "event"):
             self.__clock_event = signal.event
 
-        if hasattr(signal.xdata, "number_of_bundles_connected_to"):
-            signal.xdata.number_of_bundles_connected_to += 1
-        else:
-            signal.xdata.number_of_bundles_connected_to = 1
+        if hasattr(signal, "xdata"):
+            if hasattr(signal.xdata, "number_of_bundles_connected_to"):
+                signal.xdata.number_of_bundles_connected_to += 1
+            else:
+                signal.xdata.number_of_bundles_connected_to = 1
 
     def __str__(self):
         item_str = ""
