@@ -56,6 +56,14 @@ class PortMapping:
     def analog_ports(self):
         return list(self._analog.keys())
 
+    def get_digital_direction(self, name: str) -> PortDirection:
+        return self._digital[name]
+
+    def iter_voltage_bridges(self):
+        """Yield (digital_name, analog_name, scale, offset) for voltage bridges."""
+        for d_name, spec in self._bridges.items():
+            yield d_name, spec.analog_name, spec.scale, spec.offset
+
     @property
     def bridges(self):
         return {k: (v.analog_name, v.scale, v.offset) for k, v in self._bridges.items()}
