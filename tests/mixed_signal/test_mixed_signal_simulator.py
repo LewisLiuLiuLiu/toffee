@@ -76,14 +76,15 @@ def test_non_out_port_skipped():
     assert xyce.dac_calls == []  # IN port should not drive analog
 
 
-def test_backward_time_raises():
+def test_backward_time_noop():
     dut = FakeDut()
     xyce = FakeXyce()
     mapping = PortMapping()
     sim = MixedSignalSimulator(xyce, dut, mapping)
     sim.advance_to(5e-9)
-    with pytest.raises(ValueError):
-        sim.advance_to(2e-9)
+    sim.advance_to(2e-9)  # should be a silent no-op
+    assert sim._current_time == 5e-9
+    assert xyce.time == 5e-9
 
 
 def test_advance_applies_param_bridge():

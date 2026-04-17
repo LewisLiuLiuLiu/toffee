@@ -14,10 +14,11 @@ class MixedSignalSimulator(Simulator):
     3. Advances the analog simulator to the target time.
     """
 
-    def __init__(self, analog_simulator, dut, port_mapping: PortMapping):
+    def __init__(self, analog_simulator, dut, port_mapping: PortMapping, step_strategy=None):
         self._analog = analog_simulator
         self._dut = dut
         self._mapping = port_mapping
+        self._step_strategy = step_strategy
         self._clock_event = asyncio.Event()
         self._current_time = 0.0
 
@@ -32,19 +33,20 @@ class MixedSignalSimulator(Simulator):
         self.step_time(1e-9 * cycles)
 
     def advance_to(self, time: float) -> None:
-        if time < self._current_time:
-            raise ValueError(
-                f"Cannot advance backward in time: {time} < {self._current_time}"
-            )
-        if time == self._current_time:
+        if time <= self._current_time:
             return
         self._apply_digital_to_analog(time)
-        status, actual = self._analog.simulateUntil(time)
-        if status != 1:
-            raise RuntimeError(
-                f"Analog simulator failed at {time} (status={status})"
-            )
-        self._current_time = actual
+        if self._step_strategy is not None:
+            for sub_time in self._step_strategy.iter_steps(self._current_time, time):
+                status, actual = self._analog.simulateUntil(sub_time)
+                if status != 1:
+                    raise RuntimeError(f"Analog simulator failed at {sub_time}")
+                self._current_time = actual
+        else:
+            status, actual = self._analog.simulateUntil(time)
+            if status != 1:
+                raise RuntimeError(f"Analog simulator failed at {time}")
+            self._current_time = actual
 
     def _apply_digital_to_analog(self, until_time: float):
         for d_name, analog_name, scale, offset in self._mapping.iter_voltage_bridges():
