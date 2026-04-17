@@ -2,7 +2,7 @@ from enum import Enum, auto
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
-__all__ = ["PortDirection", "BridgeSpec", "PortMapping"]
+__all__ = ["PortDirection", "BridgeSpec", "ParamBridgeSpec", "PortMapping"]
 
 
 class PortDirection(Enum):
@@ -18,6 +18,12 @@ class BridgeSpec:
     offset: float = 0.0
 
 
+@dataclass
+class ParamBridgeSpec:
+    param_name: str
+    mapping: Dict  # digital_code -> param_value
+
+
 class PortMapping:
     """Declarative map between digital DUT pins and analog SPICE nodes/params."""
 
@@ -25,6 +31,7 @@ class PortMapping:
         self._digital: Dict[str, PortDirection] = {}
         self._analog: Dict[str, PortDirection] = {}
         self._bridges: Dict[str, BridgeSpec] = {}
+        self._param_bridges: Dict[str, ParamBridgeSpec] = {}
 
     def add_digital(self, name: str, direction: PortDirection = PortDirection.INOUT) -> "PortMapping":
         self._digital[name] = direction
@@ -59,10 +66,27 @@ class PortMapping:
     def get_digital_direction(self, name: str) -> PortDirection:
         return self._digital[name]
 
+    def param_bridge(self, digital_name: str, param_name: str, mapping: dict) -> "PortMapping":
+        if digital_name not in self._digital:
+            raise KeyError(f"Digital port '{digital_name}' not declared")
+        self._param_bridges[digital_name] = ParamBridgeSpec(param_name, mapping)
+        return self
+
+    def get_param_bridge(self, digital_name: str) -> Tuple[str, Dict]:
+        if digital_name not in self._param_bridges:
+            raise KeyError(f"Digital port '{digital_name}' has no param bridge declared")
+        spec = self._param_bridges[digital_name]
+        return spec.param_name, spec.mapping
+
     def iter_voltage_bridges(self):
         """Yield (digital_name, analog_name, scale, offset) for voltage bridges."""
         for d_name, spec in self._bridges.items():
             yield d_name, spec.analog_name, spec.scale, spec.offset
+
+    def iter_param_bridges(self):
+        """Yield (digital_name, param_name, code_mapping)."""
+        for d_name, spec in self._param_bridges.items():
+            yield d_name, spec.param_name, spec.mapping
 
     @property
     def bridges(self):

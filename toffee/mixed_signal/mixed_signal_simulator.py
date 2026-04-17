@@ -61,6 +61,18 @@ class MixedSignalSimulator(Simulator):
                     [analog_value, analog_value],
                 )
 
+        for d_name, param_name, code_mapping in self._mapping.iter_param_bridges():
+            raw_val = getattr(self._dut, d_name, None)
+            if raw_val is None:
+                continue
+            if raw_val not in code_mapping:
+                raise ValueError(
+                    f"Digital port '{d_name}' value {raw_val} not in param bridge mapping"
+                )
+            param_value = code_mapping[raw_val]
+            if hasattr(self._analog, "setCircuitParameter"):
+                self._analog.setCircuitParameter(param_name, param_value)
+
     @property
     def clock_event(self) -> asyncio.Event:
         return self._clock_event

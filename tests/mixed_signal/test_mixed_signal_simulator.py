@@ -84,3 +84,21 @@ def test_backward_time_raises():
     sim.advance_to(5e-9)
     with pytest.raises(ValueError):
         sim.advance_to(2e-9)
+
+
+def test_advance_applies_param_bridge():
+    class FakeDut2:
+        r_load_ctrl = 2  # encoded as integer codes
+
+    dut = FakeDut2()
+    xyce = FakeXyce()
+    mapping = PortMapping()
+    mapping.add_digital("r_load_ctrl", PortDirection.OUT)
+    mapping.add_analog("r_load", PortDirection.IN)
+    mapping.param_bridge("r_load_ctrl", "r_load", mapping={0: 1e3, 1: 10e3, 2: 100e3})
+
+    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim.advance_to(3e-9)
+
+    assert xyce.time == 3e-9
+    assert xyce.param_calls == [("r_load", 100e3)]

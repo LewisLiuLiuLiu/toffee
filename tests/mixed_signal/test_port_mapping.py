@@ -27,3 +27,9 @@ def test_properties_and_defaults():
     assert pm.analog_ports == ["b"]
     assert pm.bridges == {"a": ("b", 1.0, 0.0)}
     assert pm.get_bridge("a") == ("b", 1.0, 0.0)
+
+
+def test_param_bridge_requires_declared_digital_port():
+    pm = PortMapping()
+    with pytest.raises(KeyError):
+        pm.param_bridge("missing", "r_load", mapping={0: 1e3})
