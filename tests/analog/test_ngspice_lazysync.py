@@ -2,6 +2,7 @@
 
 import tempfile
 
+import toffee_test
 from toffee.analog.ngspice_simulator import NgSpiceSimulator, _GET_SYNC_DATA
 
 
@@ -14,7 +15,8 @@ C1 out 0 1p
 """
 
 
-def test_lazysync_step_time():
+@toffee_test.testcase
+async def test_lazysync_step_time():
     """
     Step a transient simulation by 1 ns.
 

@@ -3,6 +3,7 @@
 import tempfile
 
 import pytest
+import toffee_test
 
 from toffee.analog.ngspice_simulator import NgSpiceSimulator, _GET_SYNC_DATA
 
@@ -16,7 +17,8 @@ R2 out 0 1k
 """
 
 
-def test_ngspice_external_vsrc():
+@toffee_test.testcase
+async def test_ngspice_external_vsrc():
     """
     Change an EXTERNAL voltage source between simulation steps.
 

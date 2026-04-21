@@ -1,8 +1,10 @@
 import pytest
+import toffee_test
 from toffee.analog.ngspice_simulator import NgSpiceSimulator
 
 
-def test_add_async_trigger_api():
+@toffee_test.testcase
+async def test_add_async_trigger_api():
     # We can't easily run a real transient without libngspice installed,
     # but we can verify the API surface and internal state.
     sim = NgSpiceSimulator.__new__(NgSpiceSimulator)
@@ -17,7 +19,8 @@ def test_add_async_trigger_api():
     assert "V(out)" not in sim._async_triggers
 
 
-def test_send_data_fires_trigger():
+@toffee_test.testcase
+async def test_send_data_fires_trigger():
     sim = NgSpiceSimulator.__new__(NgSpiceSimulator)
     sim._async_triggers = {}
     sim._trigger_lock = __import__("threading").Lock()

@@ -1,6 +1,8 @@
 import pytest
 import asyncio
 
+import toffee_test
+
 from toffee.mixed_signal.mixed_signal_simulator import MixedSignalSimulator
 from toffee.mixed_signal.port_mapping import PortMapping, PortDirection
 
@@ -31,7 +33,8 @@ class FakeXyce:
         pass
 
 
-def test_advance_applies_dac_bridge():
+@toffee_test.testcase
+async def test_advance_applies_dac_bridge():
     dut = FakeDut()
     dut.dac_ctrl = 1
     xyce = FakeXyce()
@@ -50,7 +53,8 @@ def test_advance_applies_dac_bridge():
     assert voltages == [1.8, 1.8]
 
 
-def test_step_time_advances_and_ticks():
+@toffee_test.testcase
+async def test_step_time_advances_and_ticks():
     dut = FakeDut()
     xyce = FakeXyce()
     mapping = PortMapping()
@@ -60,7 +64,8 @@ def test_step_time_advances_and_ticks():
     assert sim._current_time == 2e-9
 
 
-def test_non_out_port_skipped():
+@toffee_test.testcase
+async def test_non_out_port_skipped():
     class FakeDutIn:
         dac_ctrl = 1
 
@@ -76,7 +81,8 @@ def test_non_out_port_skipped():
     assert xyce.dac_calls == []  # IN port should not drive analog
 
 
-def test_backward_time_noop():
+@toffee_test.testcase
+async def test_backward_time_noop():
     dut = FakeDut()
     xyce = FakeXyce()
     mapping = PortMapping()
@@ -87,7 +93,8 @@ def test_backward_time_noop():
     assert xyce.time == 5e-9
 
 
-def test_advance_applies_param_bridge():
+@toffee_test.testcase
+async def test_advance_applies_param_bridge():
     class FakeDut2:
         r_load_ctrl = 2  # encoded as integer codes
 
