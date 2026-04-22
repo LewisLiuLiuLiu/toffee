@@ -39,7 +39,7 @@ class SarEnv:
         mapping.add_digital("dac_code", PortDirection.OUT)
         mapping.add_analog("dac_in", PortDirection.IN)
         # code 0 -> 0V, 1 -> 0.6V, 2 -> 1.2V, 3 -> 1.8V
-        mapping.param_bridge(
+        mapping.d2a_param(
             "dac_code", "v_dac", mapping={0: 0.0, 1: 0.6, 2: 1.2, 3: 1.8}
         )
 

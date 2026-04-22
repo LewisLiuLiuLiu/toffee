@@ -12,6 +12,7 @@ class MixedSignalSimulator(Simulator):
     1. Reads digital OUT ports from the DUT.
     2. Maps them to analog IN ports (DAC voltages or circuit parameters).
     3. Advances the analog simulator to the target time.
+    4. Reads analog OUT ports and maps them back to digital IN ports (ADC).
     """
 
     def __init__(self, analog_simulator, dut, port_mapping: PortMapping, step_strategy=None):
@@ -42,14 +43,16 @@ class MixedSignalSimulator(Simulator):
                 if status != 1:
                     raise RuntimeError(f"Analog simulator failed at {sub_time}")
                 self._current_time = actual
+                self._apply_analog_to_digital()
         else:
             status, actual = self._analog.simulateUntil(time)
             if status != 1:
                 raise RuntimeError(f"Analog simulator failed at {time}")
             self._current_time = actual
+            self._apply_analog_to_digital()
 
     def _apply_digital_to_analog(self, until_time: float):
-        for d_name, analog_name, scale, offset in self._mapping.iter_voltage_bridges():
+        for d_name, analog_name, scale, offset in self._mapping.iter_d2a():
             if self._mapping.get_digital_direction(d_name) != PortDirection.OUT:
                 continue
             raw_val = getattr(self._dut, d_name, None)
@@ -63,17 +66,66 @@ class MixedSignalSimulator(Simulator):
                     [analog_value, analog_value],
                 )
 
-        for d_name, param_name, code_mapping in self._mapping.iter_param_bridges():
+        for d_name, param_name, code_mapping in self._mapping.iter_d2a_param():
+            if self._mapping.get_digital_direction(d_name) != PortDirection.OUT:
+                continue
             raw_val = getattr(self._dut, d_name, None)
             if raw_val is None:
                 continue
             if raw_val not in code_mapping:
                 raise ValueError(
-                    f"Digital port '{d_name}' value {raw_val} not in param bridge mapping"
+                    f"Digital port '{d_name}' value {raw_val} not in d2a_param mapping"
                 )
             param_value = code_mapping[raw_val]
             if hasattr(self._analog, "setCircuitParameter"):
                 self._analog.setCircuitParameter(param_name, param_value)
+
+    def _apply_analog_to_digital(self):
+        """Read analog results and drive digital DUT pins.
+
+        For Xyce backend: use YADC getTimeStatePairsADC() if yadc_device is specified.
+        For ngspice backend (or fallback): use read() + Python threshold comparison.
+        """
+        # --- Xyce YADC batch read (if any a2d uses yadc_device) ---
+        yadc_results = {}
+        yadc_needed = any(
+            yadc_device
+            for _, _, _, _, yadc_device in self._mapping.iter_a2d()
+        )
+        if yadc_needed and hasattr(self._analog, '_xyce'):
+            try:
+                (status, ADCnames, numADCnames, numPoints,
+                 timeArray, stateArray) = self._analog._xyce.getTimeStatePairsADC()
+                if status == 1:
+                    for i, name in enumerate(ADCnames):
+                        if numPoints > 0:
+                            yadc_results[name] = stateArray[i][numPoints - 1]
+            except (RuntimeError, OSError, AttributeError) as exc:
+                import logging
+                logging.getLogger(__name__).debug(
+                    "YADC getTimeStatePairsADC failed, falling back to threshold: %s", exc
+                )
+
+        # --- Per-port A2D ---
+        for analog_name, d_name, threshold, invert, yadc_device in self._mapping.iter_a2d():
+            if yadc_device and yadc_device in yadc_results:
+                # Xyce YADC path: use quantized digital state directly
+                digital_val = yadc_results[yadc_device]
+            else:
+                # ngspice / fallback path: read voltage + threshold
+                voltage = self._analog.read(analog_name)
+                digital_val = 1 if voltage >= threshold else 0
+
+            if invert:
+                digital_val = 0 if digital_val else 1
+
+            pin = getattr(self._dut, d_name, None)
+            if pin is None:
+                continue
+            if hasattr(pin, "value"):
+                pin.value = digital_val
+            else:
+                setattr(self._dut, d_name, digital_val)
 
     @property
     def clock_event(self) -> asyncio.Event:
