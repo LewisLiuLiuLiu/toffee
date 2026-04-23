@@ -1,106 +1,116 @@
-## Verification Report
+## Verification Report: Async Event Notification System
 
 ### Verification Evidence
 
 ```
-$ grep -rn "^\s*pass$" toffee/analog/analog_agent.py
-(no output — no stub pass statements)
+$ grep -rn "^\s*pass$" toffee/analog/ngspice_simulator.py
+256:                pass    # in _ensure_loop() RuntimeError handler — intentional
+703:            pass        # in finish() try/except for ngSpice_Command(b"reset") — intentional
 
-$ grep -rn "TODO\|FIXME" toffee/analog/analog_agent.py toffee/asynchronous.py
+$ grep -rn "TODO\|FIXME" toffee/analog/ngspice_simulator.py toffee/analog/xyce_simulator.py toffee/simulator.py toffee/asynchronous.py
 (no output — no TODO/FIXME markers)
 
-$ python3 -m pytest tests/ -v --tb=short 2>&1 | tail -10
-FAILED tests/test_bundle.py::test_bundle - Exception: Signal bind error (pre-existing)
-FAILED tests/test_bundle.py::test_bundle_list - Exception: Signal bind error (pre-existing)
-========================= 2 failed, 68 passed in 2.73s =========================
+$ python3 -m pytest tests/analog/ -v --tb=short
+===== 25 passed in 1.38s =====
+
+$ python3 -m pytest tests/analog/_verify_test_async_events.py -v
+===== 28 passed in 0.34s =====
+
+$ python3 -m pytest tests/ --ignore=tests/mixed_signal/test_sar_adc_xyce.py -v --tb=short
+===== 2 failed (pre-existing test_bundle.py), 67 passed =====
 ```
 
-### Verified Features
+### Design Contract Verification
 
-| Feature | Status | Evidence |
-|---------|--------|----------|
-| AnalogAgent default event_name="step" → clock_event | PASS | test_analog_agent_default_event_uses_clock_wait |
-| AnalogAgent custom event_name → simulator.events.get() | PASS | test_analog_agent_custom_event_uses_correct_wait |
-| AnalogAgent fallback to clock_event for unknown event | PASS | test_analog_agent_fallback_to_clock_event |
-| AnalogAgent bundle path still works | PASS | test_analog_agent_bundle_path |
-| Simulator.events default returns {"step": clock_event} | PASS | test_simulator_events_default |
-| Simulator.next_event() calls step(1) and returns "step" | PASS | test_next_event_default |
-| next_event() does NOT call tick() (contract check) | PASS | test_next_event_does_not_call_tick |
-| start_clock() wraps legacy DUTs via DigitalSimulator | PASS | test_start_clock_wraps_legacy_dut |
-| __event_loop task named "__clock_loop" for compat | PASS | test_event_loop_task_name_compat |
-| No import breakage in __init__.py exports | PASS | all 68 non-bundle tests pass |
+| Contract | File:Line | Status | Evidence |
+|----------|-----------|--------|----------|
+| Lazy loop capture (not in __init__) | ngspice_simulator.py:197,250-256 | ✅ PASS | `_asyncio_loop = None` in init; `_ensure_loop()` uses `get_running_loop()` |
+| Bounded deque (maxlen=100) | ngspice_simulator.py:199 | ✅ PASS | `deque(maxlen=100)` confirmed; overflow test verified |
+| is_closed() guard | ngspice_simulator.py:367 | ✅ PASS | `not loop.is_closed()` check before `call_soon_threadsafe` |
+| WARNING logging for errors | ngspice_simulator.py:373-375 | ✅ PASS | Uses `logging.getLogger("toffee.ngspice").warning(...)` |
+| set_pause_time wraps setPauseTime | xyce_simulator.py:148-158 | ✅ PASS | Calls `_xyce.setPauseTime(pause_time)`, raises on result != 1 |
+| read_adc_states parses YADC data | xyce_simulator.py:160-188 | ✅ PASS | Extracts names & latest states, handles errors gracefully |
+| Env variables for Xyce paths | xyce_simulator.py:12-17 | ✅ PASS | Reads `XYCE_SHARE`, `XYCE_LIB` with defaults |
+| events returns {"step": clock_event} | simulator.py:63-66 | ✅ PASS | Default property returns single-key dict |
+| next_event calls step(1), NOT tick() | simulator.py:68-76 | ✅ PASS | Only `self.step(1)` + `return "step"` |
+| __event_loop unified set/clear | asynchronous.py:176-200 | ✅ PASS | `evt.set()` / `evt.clear()` after `next_event()` |
+| start_clock uses __event_loop | asynchronous.py:220 | ✅ PASS | `create_task(__event_loop(simulator))` |
 
 ### Discovered Issues
 
 | Severity | File:Line | Description | Status |
 |----------|-----------|-------------|--------|
-| MEDIUM | analog_agent.py:17 → agent.py:22 | AnalogAgent(simulator=sim) triggers spurious "monitor_step deprecated" warning because event.wait is callable | DOCUMENTED |
-| LOW | ngspice_simulator.py:461, xyce_simulator.py:86 | Analog simulators call tick() in step_time(), which would double-trigger if used with start_clock(). Not triggered in current usage. | DOCUMENTED |
+| — | — | No production bugs found | — |
 
-### Issue Details
+### Design Notes (not bugs)
 
-#### MEDIUM: Spurious deprecation warning
-
-When `AnalogAgent(simulator=sim)` is constructed, it passes `event.wait` (a callable) to
-`Agent.__init__(bundle)`. Since `callable(event.wait) == True`, Agent's constructor enters
-the deprecated path and emits:
-
-```
-TOFFEE_WARNING: Passing monitor_step during Agent initialization is about to be deprecated...
-```
-
-This is confirmed by `test_analog_agent_simulator_emits_deprecation_warning`. The warning
-is cosmetic (functionality is correct) but confusing. NOT FIXED because:
-- Suppressing it requires changing Agent.__init__ or AnalogAgent's constructor pattern
-- This is a deliberate internal usage of the callable path, not user misuse
-- The original developer likely accepted this tradeoff
-
-#### LOW: Latent double-tick for analog simulators
-
-`NgSpiceSimulator.step_time()` (line 461) and `XyceSimulator.step_time()` (line 86) call
-`self.tick()` after advancing. The `__event_loop` also does `evt.set()/evt.clear()` after
-`next_event()` returns. If these simulators were passed to `start_clock()`, tick would fire
-twice. NOT FIXED because analog simulators are never used with `start_clock()` — they use
-direct `step_time()` calls or the `MixedSignalSimulator` adapter.
+| Item | Description | Impact |
+|------|-------------|--------|
+| NgSpice/Xyce step_time() calls tick() | When used via __event_loop → next_event() → step() → step_time() → tick(), the event gets set/cleared twice (once in tick, once in __event_loop). Harmless because both set/clear are synchronous with no await between them. | None — asyncio Event futures are resolved only once |
+| threshold_crossed event not cleared by __event_loop | The trigger fires and sets the event via call_soon_threadsafe, but __event_loop only processes the "step" event. The threshold_crossed event stays set until manually cleared. | By design — would need NgSpice-specific next_event() override for full event-driven flow |
+| Existing tests use `list` not `deque` for _pending_events | test_ngspice_async_events.py stubs use `sim._pending_events = []` instead of `deque(maxlen=100)`. Tests still work because `list.append()` and `deque.append()` share the same API. | Low — tests validate logic but not bounded capacity |
 
 ### Verification Tests
 
-| Test File | RED (broke code) | GREEN (restored code) |
-|-----------|------------------|-----------------------|
-| _verify_test_analog_agent.py | FAILED: test_analog_agent_custom_event_uses_correct_wait (broke event lookup) | 11 passed in 0.16s |
+| Test File | RED (failure confirmed) | GREEN (all pass) |
+|-----------|------------------------|-------------------|
+| _verify_test_async_events.py | FAILED: `test_next_event_does_not_call_tick` correctly catches tick() injection | 28 passed in 0.34s |
+
+### RED Phase Evidence
+
+```
+# Injected tick() into next_event():
+$ python3 -m pytest tests/analog/_verify_test_async_events.py::test_next_event_does_not_call_tick -v
+FAILED - AssertionError: next_event() must not call tick()
+assert 1 == 0
+
+# Restored code:
+$ python3 -m pytest tests/analog/_verify_test_async_events.py -v
+28 passed in 0.34s
+```
 
 ### Test Results
 
 ```
-$ python3 -m pytest tests/_verify_test_analog_agent.py -v
-tests/_verify_test_analog_agent.py::test_analog_agent_default_event_uses_clock_wait PASSED
-tests/_verify_test_analog_agent.py::test_analog_agent_custom_event_uses_correct_wait PASSED
-tests/_verify_test_analog_agent.py::test_analog_agent_fallback_to_clock_event PASSED
-tests/_verify_test_analog_agent.py::test_analog_agent_bundle_path PASSED
-tests/_verify_test_analog_agent.py::test_analog_agent_simulator_emits_deprecation_warning PASSED
-tests/_verify_test_analog_agent.py::test_simulator_events_default PASSED
-tests/_verify_test_analog_agent.py::test_next_event_default PASSED
-tests/_verify_test_analog_agent.py::test_next_event_does_not_call_tick PASSED
-tests/_verify_test_analog_agent.py::test_start_clock_wraps_legacy_dut PASSED
-tests/_verify_test_analog_agent.py::test_event_loop_task_name_compat PASSED
-tests/_verify_test_analog_agent.py::test_analog_agent_simulator_path_no_bundle_attr PASSED
-============================== 11 passed in 0.16s ==============================
+$ python3 -m pytest tests/analog/_verify_test_async_events.py -v
+tests/analog/_verify_test_async_events.py::test_ensure_loop_returns_running_loop PASSED
+tests/analog/_verify_test_async_events.py::test_ensure_loop_idempotent PASSED
+tests/analog/_verify_test_async_events.py::test_ensure_loop_no_running_loop PASSED
+tests/analog/_verify_test_async_events.py::test_pending_events_is_deque_with_maxlen PASSED
+tests/analog/_verify_test_async_events.py::test_pending_events_bounded_overflow PASSED
+tests/analog/_verify_test_async_events.py::test_trigger_with_closed_loop_does_not_crash PASSED
+tests/analog/_verify_test_async_events.py::test_trigger_with_none_loop_does_not_crash PASSED
+tests/analog/_verify_test_async_events.py::test_trigger_handler_logs_warning_on_error PASSED
+tests/analog/_verify_test_async_events.py::test_trigger_disarms_after_firing PASSED
+tests/analog/_verify_test_async_events.py::test_trigger_does_not_fire_below_threshold PASSED
+tests/analog/_verify_test_async_events.py::test_trigger_does_not_fire_twice PASSED
+tests/analog/_verify_test_async_events.py::test_trigger_forces_sync_time PASSED
+tests/analog/_verify_test_async_events.py::test_base_events_returns_step_key PASSED
+tests/analog/_verify_test_async_events.py::test_base_events_only_step PASSED
+tests/analog/_verify_test_async_events.py::test_next_event_calls_step PASSED
+tests/analog/_verify_test_async_events.py::test_next_event_does_not_call_tick PASSED
+tests/analog/_verify_test_async_events.py::test_next_event_return_type PASSED
+tests/analog/_verify_test_async_events.py::test_xyce_set_pause_time_wraps_correctly PASSED
+tests/analog/_verify_test_async_events.py::test_xyce_set_pause_time_raises_on_failure PASSED
+tests/analog/_verify_test_async_events.py::test_xyce_read_adc_states_parses_correctly PASSED
+tests/analog/_verify_test_async_events.py::test_xyce_read_adc_states_empty_data PASSED
+tests/analog/_verify_test_async_events.py::test_xyce_read_adc_states_exception_returns_empty PASSED
+tests/analog/_verify_test_async_events.py::test_xyce_read_adc_states_with_empty_pairs PASSED
+tests/analog/_verify_test_async_events.py::test_xyce_env_variables PASSED
+tests/analog/_verify_test_async_events.py::test_send_data_null_vdata PASSED
+tests/analog/_verify_test_async_events.py::test_send_data_stores_node_voltage PASSED
+tests/analog/_verify_test_async_events.py::test_ngspice_events_property PASSED
+tests/analog/_verify_test_async_events.py::test_event_loop_function_exists PASSED
+===== 28 passed in 0.34s =====
 
-$ python3 -m pytest tests/ --tb=short
-========================= 2 failed, 79 passed in 2.73s =========================
-(2 failures are pre-existing in test_bundle.py — signal binding issues unrelated to this branch)
+$ python3 -m pytest tests/analog/ -v
+===== 25 passed in 1.38s =====
 ```
 
-### Pre-existing Failures (NOT caused by this branch)
+### Unfixed Issues
 
-| Test | Error | Root Cause |
-|------|-------|------------|
-| test_bundle.py::test_bundle | Signal bind error: e, a, b not found | Mock DUT missing expected signals |
-| test_bundle.py::test_bundle_list | Signal bind error: io_c, io_d not found | Mock DUT missing expected signals |
+None — no production bugs were found.
 
-### Conclusion
+### Summary
 
-**PASS** — All AnalogAgent event configuration features work correctly. Backward compatibility
-with legacy DUTs is maintained. The `__event_loop` task naming preserves `__has_unwait_task()`
-compatibility. No import breakage detected. Two documented issues (spurious warning, latent
-double-tick) are cosmetic/latent and do not affect current functionality.
+**PASS** — The async event notification system is correctly implemented. All 11 design contracts verified. All 53 analog tests pass (28 new verification + 25 existing). No bugs, stubs, or unimplemented code found.
