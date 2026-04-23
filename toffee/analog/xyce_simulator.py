@@ -9,8 +9,12 @@ from ..simulator import Simulator
 from .xyce_prn_parser import XycePrnParser
 
 # Allow importing the official Xyce Python wrapper without installing it
-_DEFAULT_XYCE_SHARE = "/mnt/d/ongoingProjects/openEDA/install/xyce/share"
-_DEFAULT_XYCE_LIB = "/mnt/d/ongoingProjects/openEDA/install/xyce/lib"
+_DEFAULT_XYCE_SHARE = os.environ.get(
+    "XYCE_SHARE", "/mnt/d/ongoingProjects/openEDA/install/xyce/share"
+)
+_DEFAULT_XYCE_LIB = os.environ.get(
+    "XYCE_LIB", "/mnt/d/ongoingProjects/openEDA/install/xyce/lib"
+)
 
 if _DEFAULT_XYCE_SHARE not in sys.path:
     sys.path.insert(0, _DEFAULT_XYCE_SHARE)
@@ -140,6 +144,52 @@ class XyceSimulator(Simulator):
 
     def simulateUntil(self, time: float):
         return self._xyce.simulateUntil(time)
+
+    def set_pause_time(self, pause_time: float) -> None:
+        """Set a simulation pause time (synchronous breakpoint).
+
+        Calls ``xyce_interface.setPauseTime`` and raises :class:`RuntimeError`
+        if the call does not succeed.
+        """
+        result = self._xyce.setPauseTime(pause_time)
+        if result != 1:
+            raise RuntimeError(
+                f"Xyce setPauseTime({pause_time}) failed (result={result})"
+            )
+
+    def read_adc_states(self) -> dict:
+        """Read the current state of all ADC devices.
+
+        Calls ``xyce_interface.getTimeStatePairsADC`` and returns a
+        ``{ADCname: latest_state}`` dictionary.  Returns an empty dict on
+        error.
+        """
+        try:
+            data = self._xyce.getTimeStatePairsADC()
+            # data format: (names_tuple, pairs_for_adc0, pairs_for_adc1, ...)
+            # Each pairs tuple contains (time, state) tuples.
+            if not data or len(data) < 2:
+                return {}
+            names = data[0]
+            result = {}
+            for i, name in enumerate(names):
+                pairs = data[i + 1] if (i + 1) < len(data) else ()
+                # The latest state is the state from the last (time, state) pair
+                if pairs:
+                    result[name] = pairs[-1][-1]
+                else:
+                    result[name] = None
+            return result
+        except Exception as e:
+            import logging
+            logging.getLogger("toffee.xyce").warning(
+                "Failed to read ADC states: %s", e
+            )
+            return {}
+
+    def get_adc_map(self) -> tuple:
+        """Return the ADC device map from ``xyce_interface.getADCMap``."""
+        return self._xyce.getADCMap()
 
     def finish(self):
         self._xyce.close()

@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import ctypes.util
+import logging
 import os
 import shutil
 import subprocess
 import tempfile
 import threading
+from collections import deque
 from pathlib import Path
 
 from ..simulator import Simulator
@@ -191,6 +193,12 @@ class NgSpiceSimulator(Simulator):
         self._async_triggers: dict[str, dict] = {}
         self._trigger_lock = threading.Lock()
 
+        # -- asyncio event notification (lazy loop capture) --
+        self._asyncio_loop = None
+        self._events = {"step": self._clock_event, "threshold_crossed": asyncio.Event()}
+        self._pending_events: deque[str] = deque(maxlen=100)
+        self._event_lock = threading.Lock()
+
         # -- load shared library --
         resolved = _find_libngspice(lib_path)
         self._lib = ctypes.CDLL(resolved)
@@ -231,12 +239,26 @@ class NgSpiceSimulator(Simulator):
 
     def add_async_trigger(self, node_name: str, threshold: float):
         """Arm an analog trigger that fires when *node_name* >= *threshold*."""
+        self._ensure_loop()
         with self._trigger_lock:
             self._async_triggers[node_name] = {"threshold": threshold, "armed": True}
 
     def remove_async_trigger(self, node_name: str):
         with self._trigger_lock:
             self._async_triggers.pop(node_name, None)
+
+    def _ensure_loop(self) -> None:
+        """Lazily capture the running asyncio loop (not safe in __init__)."""
+        if self._asyncio_loop is None:
+            try:
+                self._asyncio_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
+    @property
+    def events(self) -> dict[str, asyncio.Event]:
+        """Return the dict of named asyncio events for async notification."""
+        return self._events
 
     # ------------------------------------------------------------------ #
     # Library setup
@@ -338,9 +360,19 @@ class NgSpiceSimulator(Simulator):
                         spec["armed"] = False
                         # Force the next GetSyncData call to pause immediately
                         self._next_sync_time = self._spice_time
-        except Exception:
-            # Swallow errors in C callback context to avoid crashing the interpreter
-            pass
+                        # Notify asyncio event loop
+                        with self._event_lock:
+                            self._pending_events.append("threshold_crossed")
+                        loop = self._asyncio_loop
+                        if loop is not None and not loop.is_closed():
+                            loop.call_soon_threadsafe(
+                                self._events["threshold_crossed"].set
+                            )
+        except Exception as e:
+            # Log errors instead of silently swallowing them
+            logging.getLogger("toffee.ngspice").warning(
+                "Error in _on_send_data trigger handler: %s", e
+            )
         return 0
 
     def _on_send_init_data(
@@ -411,6 +443,7 @@ class NgSpiceSimulator(Simulator):
 
     def step_time(self, dt: float) -> None:
         """Advance ngspice to *current_time + dt* using lazy sync."""
+        self._ensure_loop()
         if not self._bg_running:
             # Start a background transient simulation on first step.
             self._start_lazy_transient()
