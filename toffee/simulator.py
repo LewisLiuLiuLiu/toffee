@@ -59,3 +59,18 @@ class Simulator(ABC):
         For analog signals this usually falls back to clock_event.
         """
         pass
+
+    @property
+    def events(self) -> dict:
+        """Named events dict. Override in subclasses to expose more events."""
+        return {"step": self.clock_event}
+
+    async def next_event(self) -> str:
+        """Advance simulation and return the name of the next fired event.
+
+        Default implementation: advance one step and return "step".
+        The caller (__event_loop) is responsible for set/clear on the event.
+        Override for event-driven simulators (e.g. ngspice trigger).
+        """
+        self.step(1)
+        return "step"

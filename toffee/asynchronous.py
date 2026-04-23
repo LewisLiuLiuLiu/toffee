@@ -173,6 +173,33 @@ async def __clock_loop(simulator):
         simulator.tick()
 
 
+async def __event_loop(simulator):
+    """Event-driven loop: delegates time advance to simulator.next_event().
+
+    Unlike __clock_loop which always does step(1)+tick(), this loop lets
+    the simulator decide what happens next (e.g. wait for a trigger event).
+    set/clear is unified here to avoid double-triggering.
+    """
+    # Make sure main_coro executes first
+    while not hasattr(asyncio.get_event_loop(), "test_done"):
+        await asyncio.sleep(0)
+
+    while True:
+        await execute_all_coros()
+        event_name = await simulator.next_event()
+        # Unified set/clear: next_event() must NOT call tick()
+        evt = simulator.events.get(event_name)
+        if evt is not None:
+            evt.set()
+            evt.clear()
+        elif event_name is not None:
+            import logging
+            logging.getLogger("toffee.asynchronous").warning(
+                "next_event() returned unknown event name %r; known: %s",
+                event_name, list(simulator.events.keys())
+            )
+
+
 create_task = asyncio.create_task
 
 
@@ -190,8 +217,8 @@ def start_clock(simulator):
     loop = asyncio.get_event_loop()
     loop.global_clock_event = simulator.clock_event
 
-    task = create_task(__clock_loop(simulator))
-    task.set_name("__clock_loop")
+    task = create_task(__event_loop(simulator))
+    task.set_name("__clock_loop")  # Keep task name for __has_unwait_task() compatibility
 
 
 def set_clock_event(simulator, loop):
