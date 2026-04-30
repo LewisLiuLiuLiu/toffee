@@ -9,9 +9,12 @@ class AnalogAgent(Agent):
     By default uses ``clock_event`` (the "step" event).  Pass
     ``event_name`` to wait on a different named event from the
     simulator's ``events`` dict (e.g. ``"threshold_crossed"``).
+
+    ``compare_func`` is an optional comparison function used by
+    the model comparison pipeline (see :func:`toffee._compare.tolerance_compare`).
     """
 
-    def __init__(self, bundle=None, simulator=None, event_name="step"):
+    def __init__(self, bundle=None, simulator=None, event_name="step", compare_func=None):
         if simulator is not None:
             event = simulator.events.get(event_name, simulator.clock_event)
             super().__init__(event.wait)
@@ -20,3 +23,4 @@ class AnalogAgent(Agent):
         else:
             super().__init__(bundle)
             self._event_name = event_name
+        self._compare_func = compare_func

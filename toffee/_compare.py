@@ -9,6 +9,16 @@ def __default_compare(item1, item2):
     return item1 == item2
 
 
+def tolerance_compare(tol=0.05):
+    """Return a compare function that checks abs(a-b) < tol."""
+    def cmp(dut_value, model_value):
+        try:
+            return abs(float(dut_value) - float(model_value)) < tol
+        except (TypeError, ValueError):
+            return False
+    return cmp
+
+
 def compare_once(dut_item, std_item, compare=None, match_detail=False):
     if compare is None:
         compare = __default_compare
