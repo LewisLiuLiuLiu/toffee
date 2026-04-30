@@ -3,7 +3,13 @@ import threading
 
 import pytest
 import toffee_test
-from toffee.analog.ngspice_simulator import NgSpiceSimulator
+from toffee.analog.ngspice_simulator import (
+    NgSpiceSimulator,
+    _on_send_data_global,
+    _simulators,
+    _VecValues,
+    _VecValuesAll,
+)
 
 
 @toffee_test.testcase
@@ -25,31 +31,23 @@ async def test_add_async_trigger_api():
 
 @toffee_test.testcase
 async def test_send_data_fires_trigger():
-    sim = NgSpiceSimulator.__new__(NgSpiceSimulator)
-    sim._async_triggers = {}
-    sim._trigger_lock = __import__("threading").Lock()
-    sim._node_voltages = {}
-    sim._spice_time = 5e-9
-    sim._next_sync_time = float("inf")
+    sim = _make_stub_sim()
     sim._asyncio_loop = None
-    sim._events = {"step": asyncio.Event(), "threshold_crossed": asyncio.Event()}
-    sim._pending_events = []
-    sim._event_lock = __import__("threading").Lock()
 
     sim.add_async_trigger("v(out)", threshold=1.5)
 
     import ctypes
-    from toffee.analog.ngspice_simulator import _VecValues, _VecValuesAll
 
     vv = _VecValues(name=b"v(out)", creal=1.6, cimag=0.0, is_scale=False, is_complex=False)
     p_vv = ctypes.pointer(ctypes.pointer(vv))
     vva = _VecValuesAll(veccount=1, vecindex=0, vecsa=p_vv)
 
-    sim._on_send_data(ctypes.pointer(vva), 1, 0, None)
+    _call_send_data(sim, ctypes.pointer(vva), 1)
 
     assert sim._async_triggers["v(out)"]["armed"] is False
     assert sim._next_sync_time == 5e-9
     assert sim._node_voltages["v(out)"] == 1.6
+    _simulators.pop(sim._user_id, None)
 
 
 # --- Step 1 tests: asyncio event system (lazy loop + events dict) ---
@@ -111,7 +109,15 @@ def _make_stub_sim():
     sim._events = {"step": asyncio.Event(), "threshold_crossed": asyncio.Event()}
     sim._pending_events = []
     sim._event_lock = threading.Lock()
+    sim._user_id = id(sim)
+    _simulators[sim._user_id] = sim
     return sim
+
+
+def _call_send_data(sim, vv_ptr, count):
+    """Call the global _on_send_data_global with the sim's userdata."""
+    import ctypes
+    _on_send_data_global(vv_ptr, count, 0, sim._user_id)
 
 
 @toffee_test.testcase
@@ -123,18 +129,18 @@ async def test_trigger_sets_threshold_crossed_event():
     sim.add_async_trigger("v(out)", threshold=1.5)
 
     import ctypes
-    from toffee.analog.ngspice_simulator import _VecValues, _VecValuesAll
 
     vv = _VecValues(name=b"v(out)", creal=1.6, cimag=0.0, is_scale=False, is_complex=False)
     p_vv = ctypes.pointer(ctypes.pointer(vv))
     vva = _VecValuesAll(veccount=1, vecindex=0, vecsa=p_vv)
 
     assert not sim._events["threshold_crossed"].is_set()
-    sim._on_send_data(ctypes.pointer(vva), 1, 0, None)
+    _call_send_data(sim, ctypes.pointer(vva), 1)
 
     # The event should be set via call_soon_threadsafe; give the loop a chance
     await asyncio.sleep(0)
     assert sim._events["threshold_crossed"].is_set()
+    _simulators.pop(sim._user_id, None)
 
 
 @toffee_test.testcase
@@ -146,15 +152,15 @@ async def test_trigger_appends_pending_events():
     sim.add_async_trigger("v(out)", threshold=1.5)
 
     import ctypes
-    from toffee.analog.ngspice_simulator import _VecValues, _VecValuesAll
 
     vv = _VecValues(name=b"v(out)", creal=1.6, cimag=0.0, is_scale=False, is_complex=False)
     p_vv = ctypes.pointer(ctypes.pointer(vv))
     vva = _VecValuesAll(veccount=1, vecindex=0, vecsa=p_vv)
 
-    sim._on_send_data(ctypes.pointer(vva), 1, 0, None)
+    _call_send_data(sim, ctypes.pointer(vva), 1)
 
     assert "threshold_crossed" in sim._pending_events
+    _simulators.pop(sim._user_id, None)
 
 
 @toffee_test.testcase
@@ -166,13 +172,13 @@ async def test_trigger_no_event_without_loop():
     sim.add_async_trigger("v(out)", threshold=1.5)
 
     import ctypes
-    from toffee.analog.ngspice_simulator import _VecValues, _VecValuesAll
 
     vv = _VecValues(name=b"v(out)", creal=1.6, cimag=0.0, is_scale=False, is_complex=False)
     p_vv = ctypes.pointer(ctypes.pointer(vv))
     vva = _VecValuesAll(veccount=1, vecindex=0, vecsa=p_vv)
 
-    sim._on_send_data(ctypes.pointer(vva), 1, 0, None)
+    _call_send_data(sim, ctypes.pointer(vva), 1)
 
     assert "threshold_crossed" in sim._pending_events
     assert not sim._events["threshold_crossed"].is_set()
+    _simulators.pop(sim._user_id, None)

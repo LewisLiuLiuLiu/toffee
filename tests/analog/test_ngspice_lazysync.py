@@ -3,7 +3,7 @@
 import tempfile
 
 import toffee_test
-from toffee.analog.ngspice_simulator import NgSpiceSimulator, _GET_SYNC_DATA
+from toffee.analog.ngspice_simulator import NgSpiceSimulator
 
 
 NETLIST = """
@@ -20,37 +20,14 @@ async def test_lazysync_step_time():
     """
     Step a transient simulation by 1 ns.
 
-    We manually re-register the GetSyncData callback here because
-    pytest's trace/profiling machinery introduces severe overhead
-    (or even correctness issues) when the callback is registered
-    inside the NgSpiceSimulator class definition.  Re-registering
-    from the test function scope avoids both problems.
+    With the singleton callback model, the global GetSyncData callback
+    handles lazy sync automatically — no manual re-registration needed.
     """
     netlist = tempfile.NamedTemporaryFile(mode='w', suffix='.sp', delete=False)
     netlist.write(NETLIST)
     netlist.close()
 
     sim = NgSpiceSimulator(netlist.name)
-
-    def fast_sync(ckttime, p_delta, old_delta, redostep, ident, location, userdata):
-        tts = sim._next_sync_time - ckttime
-        if tts <= 0:
-            sim._spice_time = ckttime
-            sim._sync_event.set()
-            sim._resume_event.wait()
-            sim._resume_event.clear()
-        elif p_delta and p_delta[0] > tts > 0:
-            p_delta[0] = tts
-        return 0
-
-    sim._cb_get_sync_data = _GET_SYNC_DATA(fast_sync)
-    sim._lib.ngSpice_Init_Sync(
-        sim._cb_get_vsrc_data,
-        sim._cb_get_isrc_data,
-        sim._cb_get_sync_data,
-        __import__("ctypes").byref(__import__("ctypes").c_int(0)),
-        None,
-    )
 
     sim.step_time(1e-9)
     assert sim._current_time > 0
