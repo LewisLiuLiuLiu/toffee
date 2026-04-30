@@ -55,7 +55,7 @@ async def opamp_env(toffee_request):
 
 @toffee_test.testcase
 async def test_opamp_dc_ngspice(opamp_env):
-    opamp_env.simulator.run_analysis([".op"], save_vars=["@m5[vdsat]"])
+    opamp_env.simulator.run_analysis([".op"], save_vars=["@m5[vdsat]", "@m1[id]"])
     vout = await opamp_env.agent.measure_vout()
     vdsat_m5 = opamp_env.simulator.read("v(@m5[vdsat])")
     print(f"\n[ngspice opamp DC] vout = {vout} V, M5 Vdsat = {vdsat_m5} V\n")
@@ -63,3 +63,13 @@ async def test_opamp_dc_ngspice(opamp_env):
     # Saturation condition for the second-stage NMOS load: Vds > Vdsat
     assert vout > vdsat_m5, f"Expected Vds ({vout} V) > Vdsat ({vdsat_m5} V) for saturation"
     assert opamp_env.simulator.read("v(vdd)") == 1.8
+
+    # Verify first-stage diff pair bias current
+    id_m1 = opamp_env.simulator.read("i(@m1[id])")
+    assert abs(id_m1) > 1e-6, f"M1 current {id_m1}A too small"
+
+    # Verify vout in reasonable DC range (not at rails)
+    assert 0.3 < vout < 1.7, f"vout={vout}V out of expected DC range [0.3, 1.7]"
+
+    # Verify vdsat_m5 > 0 (ensure transistor is on)
+    assert vdsat_m5 > 0, f"M5 Vdsat={vdsat_m5}V, transistor may be off"
