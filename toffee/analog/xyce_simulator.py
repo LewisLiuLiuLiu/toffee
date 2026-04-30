@@ -138,12 +138,17 @@ class XyceSimulator(Simulator):
     setCircuitParameter = set_param
 
     def update_dac(self, dac_name: str, time_array: list, voltage_array: list):
-        self._xyce.updateTimeVoltagePairs(dac_name, time_array, voltage_array)
+        # Xyce YDAC devices require the internal name format (YDAC!<name>)
+        internal_name = dac_name if "!" in dac_name else f"YDAC!{dac_name}"
+        self._xyce.updateTimeVoltagePairs(internal_name, time_array, voltage_array)
 
     updateTimeVoltagePairs = update_dac
 
     def simulateUntil(self, time: float):
-        return self._xyce.simulateUntil(time)
+        status, actual = self._xyce.simulateUntil(time)
+        if status == 1:
+            self._current_time = actual
+        return status, actual
 
     def set_pause_time(self, pause_time: float) -> None:
         """Set a simulation pause time (synchronous breakpoint).

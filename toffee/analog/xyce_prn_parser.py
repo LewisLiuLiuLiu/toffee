@@ -31,11 +31,17 @@ class XycePrnParser:
 
     def read_at_time(self, variable_name: str, target_time: float):
         """Return the value of *variable_name* at the row closest to *target_time*."""
-        if variable_name not in self.columns:
+        # Case-insensitive lookup since Xyce uppercases column headers
+        var_upper = variable_name.upper()
+        col_idx = None
+        for i, col in enumerate(self.columns):
+            if col.upper() == var_upper:
+                col_idx = i
+                break
+        if col_idx is None:
             raise KeyError(
                 f"Variable '{variable_name}' not in PRN. Available: {self.columns}"
             )
-        col_idx = self.columns.index(variable_name)
         time_idx = self.columns.index("TIME")
 
         best_val = None
@@ -50,11 +56,16 @@ class XycePrnParser:
 
     def read_latest(self, variable_name: str):
         """Return the last available value of *variable_name*."""
-        if variable_name not in self.columns:
+        var_upper = variable_name.upper()
+        col_idx = None
+        for i, col in enumerate(self.columns):
+            if col.upper() == var_upper:
+                col_idx = i
+                break
+        if col_idx is None:
             raise KeyError(
                 f"Variable '{variable_name}' not in PRN. Available: {self.columns}"
             )
-        col_idx = self.columns.index(variable_name)
         if not self.rows:
             raise ValueError("No data rows in PRN file")
         return self.rows[-1][col_idx]
