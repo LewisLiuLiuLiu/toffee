@@ -479,6 +479,33 @@ class NgSpiceSimulator(Simulator):
         if time > self._current_time:
             self.step_time(time - self._current_time)
 
+    async def next_event(self) -> str:
+        """Event-driven step: advance ngspice by 1ns without blocking asyncio."""
+        self._ensure_loop()
+        if not self._bg_running:
+            self._start_lazy_transient()
+
+        target = self._current_time + 1e-9
+        self._next_sync_time = target
+        self._sync_event.clear()
+        self._resume_event.set()
+
+        loop = asyncio.get_running_loop()
+        ok = await loop.run_in_executor(None, self._sync_event.wait, 60.0)
+        if not ok:
+            raise RuntimeError(
+                f"Timeout waiting for ngspice to reach sync point "
+                f"{target} s (spice time {self._spice_time} s)"
+            )
+
+        self._current_time = self._spice_time
+        # Explicitly do NOT call tick() — __event_loop handles it
+
+        with self._event_lock:
+            if self._pending_events:
+                return self._pending_events.popleft()
+        return "step"
+
     def step_time(self, dt: float) -> None:
         """Advance ngspice to *current_time + dt* using lazy sync."""
         self._ensure_loop()
@@ -496,7 +523,7 @@ class NgSpiceSimulator(Simulator):
                 f"{target} s (current spice time {self._spice_time} s)"
             )
         self._current_time = self._spice_time
-        self.tick()
+        # tick() removed — __event_loop handles set/clear uniformly
 
     def _start_lazy_transient(self) -> None:
         """Load a long transient netlist and start bg_run for lazy sync."""
