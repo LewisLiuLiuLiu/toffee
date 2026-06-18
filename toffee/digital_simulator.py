@@ -24,3 +24,7 @@ class DigitalSimulator(Simulator):
         if xpin is not None and hasattr(xpin, "event"):
             return xpin.event
         return self._event
+
+    @property
+    def events(self) -> dict:
+        return {"step": self._event}

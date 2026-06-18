@@ -119,3 +119,7 @@ class PortMapping:
         """Yield (analog_name, digital_name, threshold, invert, yadc_device)."""
         for a_name, spec in self._a2d.items():
             yield a_name, spec.digital_name, spec.threshold, spec.invert, spec.yadc_device
+
+    def has_a2d(self) -> bool:
+        """Return True if any A2D mappings exist."""
+        return len(self._a2d) > 0

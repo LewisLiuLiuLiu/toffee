@@ -6,6 +6,7 @@ __all__ = [
     "run",
     "gather",
     "start_clock",
+    "start_callback_executor",
     "main_coro",
 ]
 
@@ -42,6 +43,17 @@ async def __execute_callback():
     for func, args, kwargs in callback_list:
         need_rerun |= await func(*args, **kwargs)
     return need_rerun
+
+
+async def run_pending_callbacks():
+    """Run framework callbacks once.
+
+    Designed for environments without ``start_clock`` (e.g. analog
+    verification where the simulator runs via lazy sync).  Call this
+    in a background task to keep the priority-task executor alive so
+    that ``driver_hook`` and ``monitor_hook`` can fire.
+    """
+    await __execute_callback()
 
 
 def task_run():
@@ -200,6 +212,18 @@ async def __event_loop(simulator):
             )
 
 
+async def __callback_executor_loop():
+    """Analog version of __event_loop — drains callbacks without stepping simulator."""
+    while not hasattr(asyncio.get_event_loop(), "test_done"):
+        await asyncio.sleep(0)
+
+    while not asyncio.get_event_loop().test_done:
+        await execute_all_coros()
+        await asyncio.sleep(0)
+
+    asyncio.get_event_loop().global_clock_event.set()
+
+
 create_task = asyncio.create_task
 
 
@@ -219,6 +243,22 @@ def start_clock(simulator):
 
     task = create_task(__event_loop(simulator))
     task.set_name("__clock_loop")  # Keep task name for __has_unwait_task() compatibility
+
+
+def start_callback_executor(simulator):
+    """Start a callback-only loop for analog environments.
+
+    Unlike ``start_clock`` which drives the simulator via ``next_event()``,
+    this starts a loop that only drains priority tasks (driver_hook, etc.).
+    Use this with :class:`~toffee.analog.analog_env.AnalogEnv` where the
+    simulator is driven lazily by agent methods.
+    """
+    loop = asyncio.get_event_loop()
+    if not hasattr(loop, "delayer_list"):
+        loop.delayer_list = []
+    loop.global_clock_event = asyncio.Event()
+    task = create_task(__callback_executor_loop())
+    task.set_name("__clock_loop")
 
 
 def set_clock_event(simulator, loop):

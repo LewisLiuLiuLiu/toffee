@@ -8,6 +8,7 @@ __all__ = [
     "BundleList",
 ]
 
+import asyncio
 import random
 import re
 from enum import Enum
@@ -687,7 +688,8 @@ class Bundle(MObject):
 
         Args:
             dut: The dut to bind the bundle to.
-            unconnected_signal_access: Whether unconnected signals could be accessed.
+            unconnected_signal_access: Deprecated. Kept for backward compatibility.
+                Missing signals always raise an exception regardless of this flag.
 
         Returns:
             The bundle itself.
@@ -710,6 +712,15 @@ class Bundle(MObject):
             None,
             None,
         )
+
+        # Auto-detect loop.global_clock_event (set by start_clock)
+        try:
+            loop = asyncio.get_event_loop()
+            global_event = getattr(loop, "global_clock_event", None)
+            if global_event is not None:
+                self.set_clock_event(global_event)
+        except RuntimeError:
+            pass
 
         self.bound = True
         if self.write_mode is not None:
@@ -1246,17 +1257,18 @@ class Bundle(MObject):
         self, connected_signals, level_string, rule_stack, unconnected_signal_access
     ):
         """
-        Detect missing signals in the bundle. Log a warning if a signal is not found.
-        When unconnected_signal_access is True, set the unconnected signals as dummy
-        signals.
+        Detect missing signals in the bundle. Missing signals always raise an
+        exception so that binding mistakes are surfaced immediately.
+
+        The ``unconnected_signal_access`` argument is deprecated and has no effect;
+        it is kept only for backward compatibility.
 
         Args:
             connected_signals: A list of connected signals.
             level_string: The string of the current level.
-            unconnected_signal_access: Whether unconnected signals could be accessed.
+            unconnected_signal_access: Deprecated. Kept for backward compatibility.
         """
 
-        self._dummy_signal = DummySignal()
         error_connected_signals = set()
 
         for signal in self.current_level_signals:
@@ -1265,8 +1277,6 @@ class Bundle(MObject):
                 error_connected_signals.add((
                     str(Bundle.__appended_level_string(level_string, signal)), rule_string
                 ))
-                if unconnected_signal_access:
-                    setattr(self, signal, self._dummy_signal)
 
         for signal_list_name, signal_list in self.__all_signal_lists():
             for idx, signal in enumerate(signal_list.names):
@@ -1278,8 +1288,6 @@ class Bundle(MObject):
                     error_connected_signals.add((
                         level_string, rule_string
                     ))
-                    if unconnected_signal_access:
-                        signal_list.signals[idx] = self._dummy_signal
 
         if len(error_connected_signals) > 0:
             error_message = f"Signal bind error, the following signals in bundle {self.__class__.__name__} are not found in dut, make sure the connection rules are correct (signal_name -> search_rule_in_dut): "

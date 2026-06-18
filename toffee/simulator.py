@@ -74,3 +74,10 @@ class Simulator(ABC):
         """
         self.step(1)
         return "step"
+
+    def finish(self) -> None:
+        """Release simulator resources.
+
+        Default is a no-op.  Backends that allocate native resources
+        (e.g. ngspice shared library, Xyce processes) override this.
+        """
