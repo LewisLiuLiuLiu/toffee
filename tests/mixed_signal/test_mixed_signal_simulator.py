@@ -3,7 +3,7 @@ import asyncio
 
 import toffee_test
 
-from toffee.mixed_signal.mixed_signal_simulator import MixedSignalSimulator
+from toffee.mixed_signal.mixed_signal_orchestrator import MixedSignalOrchestrator
 from toffee.mixed_signal.port_mapping import PortMapping, PortDirection
 
 
@@ -12,6 +12,12 @@ class FakeDut:
         self.dac_ctrl = 0
         self.comp_out = 0
 
+    def Step(self, cycles=1):
+        pass
+
+    def RefreshComb(self):
+        pass
+
 
 class FakeXyce:
     def __init__(self):
@@ -19,10 +25,15 @@ class FakeXyce:
         self.dac_calls = []
         self.param_calls = []
         self._read_values = {}
+        self.current_time = 0.0
 
     def simulateUntil(self, t):
         self.time = t
         return (1, t)
+
+    def step_time(self, dt):
+        self.time += dt
+        self.current_time = self.time
 
     def updateTimeVoltagePairs(self, name, times, voltages):
         self.dac_calls.append((name, times, voltages))
@@ -31,8 +42,28 @@ class FakeXyce:
         self.param_calls.append((name, value))
         return 1
 
+    set_parameter = setCircuitParameter
+
     def read(self, name):
         return self._read_values.get(name, 0.0)
+
+    def read_adc_states(self):
+        return {}
+
+    def set_source(self, name, value):
+        self.dac_calls.append((name, [self.time, self.time + 1e-9], [value, value]))
+
+    def set_source_waveform(self, name, times, values):
+        self.dac_calls.append((name, times, values))
+
+    def register_trigger(self, node, threshold):
+        pass
+
+    def unregister_trigger(self, node):
+        pass
+
+    def finish(self):
+        pass
 
     def close(self):
         pass
@@ -48,7 +79,7 @@ async def test_advance_applies_dac_bridge():
     mapping.add_analog("v_dac", PortDirection.IN)
     mapping.d2a("dac_ctrl", "v_dac", scale=1.8)
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(5e-9)
 
     assert xyce.time == 5e-9
@@ -59,11 +90,12 @@ async def test_advance_applies_dac_bridge():
 
 
 @toffee_test.testcase
-async def test_step_time_advances_and_ticks():
+async def test_step_time_advances_time():
+    """step_time() advances the analog simulator to the requested time."""
     dut = FakeDut()
     xyce = FakeXyce()
     mapping = PortMapping()
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.step_time(2e-9)
     assert xyce.time == 2e-9
     assert sim._current_time == 2e-9
@@ -73,6 +105,8 @@ async def test_step_time_advances_and_ticks():
 async def test_non_out_port_skipped():
     class FakeDutIn:
         dac_ctrl = 1
+        Step = staticmethod(lambda cycles=1: None)
+        RefreshComb = staticmethod(lambda: None)
 
     dut = FakeDutIn()
     xyce = FakeXyce()
@@ -81,7 +115,7 @@ async def test_non_out_port_skipped():
     mapping.add_analog("v_dac", PortDirection.IN)
     mapping.d2a("dac_ctrl", "v_dac", scale=1.8)
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(3e-9)
     assert xyce.dac_calls == []  # IN port should not drive analog
 
@@ -91,7 +125,7 @@ async def test_backward_time_noop():
     dut = FakeDut()
     xyce = FakeXyce()
     mapping = PortMapping()
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(5e-9)
     sim.advance_to(2e-9)  # should be a silent no-op
     assert sim._current_time == 5e-9
@@ -102,6 +136,8 @@ async def test_backward_time_noop():
 async def test_advance_applies_param_bridge():
     class FakeDut2:
         r_load_ctrl = 2  # encoded as integer codes
+        Step = staticmethod(lambda cycles=1: None)
+        RefreshComb = staticmethod(lambda: None)
 
     dut = FakeDut2()
     xyce = FakeXyce()
@@ -110,7 +146,7 @@ async def test_advance_applies_param_bridge():
     mapping.add_analog("r_load", PortDirection.IN)
     mapping.d2a_param("r_load_ctrl", "r_load", mapping={0: 1e3, 1: 10e3, 2: 100e3})
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(3e-9)
 
     assert xyce.time == 3e-9
@@ -129,7 +165,7 @@ async def test_advance_applies_a2d_bridge():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9)
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(1e-9)
 
     assert dut.comp_out == 1
@@ -148,33 +184,38 @@ async def test_a2d_low_voltage_drives_zero():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9)
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(1e-9)
 
     assert dut.comp_out == 0
 
 
-class FakeXyceInner:
-    """Fake underlying Xyce interface with YADC support."""
-
-    def __init__(self, adc_names, state_rows, num_points):
-        self._adc_names = adc_names
-        self._state_rows = state_rows
-        self._num_points = num_points
-
-    def getTimeStatePairsADC(self):
-        """Return (status, ADCnames, numADCnames, numPoints, timeArray, stateArray)."""
-        time_array = [float(i) for i in range(self._num_points)]
-        return (1, self._adc_names, len(self._adc_names),
-                self._num_points, time_array, self._state_rows)
-
-
 class FakeXyceWithYADC(FakeXyce):
-    """FakeXyce that also has a _xyce inner object with YADC support."""
+    """FakeXyce that exposes YADC via read_adc_states() and transparent read()."""
 
     def __init__(self, adc_names, state_rows, num_points):
         super().__init__()
-        self._xyce = FakeXyceInner(adc_names, state_rows, num_points)
+        self._yadc_results = {}
+        self._yadc_to_node = {}
+        self._yadc_overrides = {}
+        for i, name in enumerate(adc_names):
+            if num_points > 0:
+                self._yadc_results[name] = state_rows[i][num_points - 1]
+
+    def read_adc_states(self) -> dict:
+        # Populate overrides from YADC states
+        for yadc_name, state in self._yadc_results.items():
+            if yadc_name in self._yadc_to_node:
+                node = self._yadc_to_node[yadc_name]
+                self._yadc_overrides[node] = 1.8 if state >= 1 else 0.0
+        return dict(self._yadc_results)
+
+    def read(self, name):
+        # Check YADC overrides first (transparent read, like XyceSimulator)
+        for yadc_name, state in self._yadc_results.items():
+            if self._yadc_to_node.get(yadc_name) == name:
+                return 1.8 if state >= 1 else 0.0
+        return super().read(name)
 
 
 @toffee_test.testcase
@@ -195,6 +236,7 @@ async def test_a2d_yadc_uses_quantized_state_directly():
         state_rows=state_rows,
         num_points=1,
     )
+    xyce._yadc_to_node["YADC1"] = "v_cmp"
     # Even though read() would return a low voltage, YADC should take precedence
     xyce._read_values["v_cmp"] = 0.3
 
@@ -203,7 +245,7 @@ async def test_a2d_yadc_uses_quantized_state_directly():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9, yadc_device="YADC1")
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(1e-9)
 
     # YADC says state=1, so digital_val should be 1 (not 0 from threshold)
@@ -223,6 +265,7 @@ async def test_a2d_yadc_zero_state_used_directly():
         state_rows=state_rows,
         num_points=1,
     )
+    xyce._yadc_to_node["YADC1"] = "v_cmp"
     # read() would return a high voltage, but YADC should take precedence
     xyce._read_values["v_cmp"] = 1.5
 
@@ -231,7 +274,7 @@ async def test_a2d_yadc_zero_state_used_directly():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9, yadc_device="YADC1")
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(1e-9)
 
     # YADC says state=0, so digital_val should be 0 (not 1 from threshold)
@@ -250,6 +293,7 @@ async def test_a2d_yadc_invert_applied():
         state_rows=state_rows,
         num_points=1,
     )
+    xyce._yadc_to_node["YADC1"] = "v_cmp"
     xyce._read_values["v_cmp"] = 0.3
 
     mapping = PortMapping()
@@ -257,7 +301,7 @@ async def test_a2d_yadc_invert_applied():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9, invert=True, yadc_device="YADC1")
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(1e-9)
 
     # YADC says state=1, inverted -> 0
@@ -265,10 +309,10 @@ async def test_a2d_yadc_invert_applied():
 
 
 @toffee_test.testcase
-async def test_a2d_yadc_fallback_when_no_xyce_attr():
-    """Without _xyce attribute, should fall back to threshold comparison."""
+async def test_a2d_yadc_fallback_when_no_read_adc_states():
+    """Without read_adc_states() method, should fall back to threshold comparison."""
     dut = FakeDut()
-    xyce = FakeXyce()  # no _xyce attribute
+    xyce = FakeXyce()  # no read_adc_states method
     xyce._read_values["v_cmp"] = 0.3
 
     mapping = PortMapping()
@@ -276,10 +320,10 @@ async def test_a2d_yadc_fallback_when_no_xyce_attr():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9, yadc_device="YADC1")
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(1e-9)
 
-    # No _xyce, so fallback to threshold: 0.3 < 0.9 -> 0
+    # No read_adc_states, so fallback to threshold: 0.3 < 0.9 -> 0
     assert dut.comp_out == 0
 
 
@@ -293,14 +337,14 @@ async def test_a2d_threshold_invert():
     mapping.add_digital("comp_out", PortDirection.IN)
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9, invert=True)
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(1e-9)
     assert dut.comp_out == 0  # 1.5 >= 0.9 → 1, inverted → 0
 
 
 @toffee_test.testcase
-async def test_d2a_param_unmapped_code_raises():
-    """Verify that an unmapped digital code in d2a_param raises ValueError."""
+async def test_d2a_param_unmapped_code_skipped():
+    """Verify that an unmapped digital code in d2a_param is silently skipped."""
     dut = FakeDut()
     dut.dac_ctrl = 99  # not in mapping
     xyce = FakeXyce()
@@ -308,9 +352,10 @@ async def test_d2a_param_unmapped_code_raises():
     mapping.add_digital("dac_ctrl", PortDirection.OUT)
     mapping.add_analog("v_dac", PortDirection.IN)
     mapping.d2a_param("dac_ctrl", "v_dac", mapping={0: 0.0, 1: 1.0})
-    sim = MixedSignalSimulator(xyce, dut, mapping)
-    with pytest.raises(ValueError, match="not in d2a_param mapping"):
-        sim.advance_to(1e-9)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
+    sim.advance_to(1e-9)
+    # Unmapped code → no parameter set
+    assert xyce.param_calls == []
 
 
 @toffee_test.testcase
@@ -318,6 +363,8 @@ async def test_d2a_param_in_port_skipped():
     """Verify that d2a_param with a non-OUT digital direction is skipped."""
     class FakeDutWithCtrl:
         r_ctrl = 2
+        Step = staticmethod(lambda cycles=1: None)
+        RefreshComb = staticmethod(lambda: None)
 
     dut = FakeDutWithCtrl()
     xyce = FakeXyce()
@@ -327,7 +374,7 @@ async def test_d2a_param_in_port_skipped():
     mapping.add_analog("r_load", PortDirection.IN)
     mapping.d2a_param("r_ctrl", "r_load", mapping={0: 1e3, 1: 10e3, 2: 100e3})
 
-    sim = MixedSignalSimulator(xyce, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, xyce, mapping)
     sim.advance_to(3e-9)
 
     # IN port should not drive analog parameters

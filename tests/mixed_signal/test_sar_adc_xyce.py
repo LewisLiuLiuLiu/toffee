@@ -5,7 +5,7 @@ import tempfile
 import toffee_test
 from toffee import driver_method
 from toffee.analog.xyce_simulator import XyceSimulator
-from toffee.mixed_signal.mixed_signal_simulator import MixedSignalSimulator
+from toffee.mixed_signal.mixed_signal_orchestrator import MixedSignalOrchestrator
 from toffee.mixed_signal.port_mapping import PortMapping, PortDirection
 from toffee.mixed_signal.step_strategy import StepExactStrategy
 
@@ -18,6 +18,12 @@ class FakeSarDut:
 
     def set_code(self, code: int):
         self.dac_code = code
+
+    def Step(self, cycles=1):
+        pass
+
+    def RefreshComb(self):
+        pass
 
 
 class SarEnv:
@@ -34,6 +40,7 @@ class SarEnv:
             f.write(".end\n")
 
         xyce = XyceSimulator(tb)
+        self.xyce = xyce
         self.dut = FakeSarDut()
         mapping = PortMapping()
         mapping.add_digital("dac_code", PortDirection.OUT)
@@ -43,8 +50,8 @@ class SarEnv:
             "dac_code", "v_dac", mapping={0: 0.0, 1: 0.6, 2: 1.2, 3: 1.8}
         )
 
-        self.sim = MixedSignalSimulator(
-            xyce, self.dut, mapping, step_strategy=StepExactStrategy(max_step=0.5e-9)
+        self.sim = MixedSignalOrchestrator(
+            self.dut, xyce, mapping, step_strategy=StepExactStrategy(max_step=0.5e-9)
         )
 
 
@@ -58,6 +65,6 @@ async def sar_env(toffee_request):
 async def test_sar_adc_step_response(sar_env):
     sar_env.dut.set_code(3)
     sar_env.sim.advance_to(2e-9)
-    vout = sar_env.sim.read("V(VOUT)")
+    vout = sar_env.xyce.read("V(VOUT)")
     # At 2ns the RC should be close to 1.8V
     assert vout > 1.5, f"Expected vout > 1.5V at 2ns, got {vout}"

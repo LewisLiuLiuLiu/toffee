@@ -270,13 +270,13 @@ adder_bundle = AdderBundle()
 adder_bundle['a'].value = 1
 ```
 
-**访问未连接信号**
+**未连接信号**
 
 ```python
 def bind(self, dut, unconnected_signal_access=True)
 ```
 
-在 `bind` 时，我们可以通过传入 `unconnected_signal_access` 参数来控制是否允许访问未连接的信号。默认为 `True`，即允许访问未连接的信号，此时当写入该信号时，该信号不会发生变化，当读取该信号时，会返回 `None`。 当 `unconnected_signal_access` 为 `False` 时，访问未连接的信号会抛出异常。
+在 `bind` 时，如果 Bundle 中声明的信号在 DUT 中找不到对应的实际信号，会立即抛出异常。`unconnected_signal_access` 参数已废弃，保留仅为了向后兼容；无论传入 `True` 还是 `False`，缺失信号都会触发异常。这样可以在绑定时立即发现连接规则错误。
 
 **同时赋值所有信号**
 

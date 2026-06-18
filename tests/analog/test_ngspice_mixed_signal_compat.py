@@ -1,4 +1,4 @@
-"""Verify NgSpiceSimulator exposes the MixedSignalSimulator-compatible API."""
+"""Verify NgSpiceSimulator exposes the MixedSignalOrchestrator-compatible API."""
 import os
 import tempfile
 
@@ -74,13 +74,19 @@ async def test_set_circuit_parameter():
 
 @toffee_test.testcase
 async def test_mixed_signal_simulator_with_ngspice():
-    """Full integration: MixedSignalSimulator + NgSpiceSimulator + PortMapping."""
-    from toffee.mixed_signal.mixed_signal_simulator import MixedSignalSimulator
+    """Full integration: MixedSignalOrchestrator + NgSpiceSimulator + PortMapping."""
+    from toffee.mixed_signal.mixed_signal_orchestrator import MixedSignalOrchestrator
     from toffee.mixed_signal.port_mapping import PortMapping, PortDirection
     from toffee.mixed_signal.step_strategy import StepExactStrategy
 
     class FakeDut:
         vin_ctrl = 1
+
+        def Step(self, cycles=1):
+            pass
+
+        def RefreshComb(self):
+            pass
 
     path = os.path.join(tempfile.mkdtemp(prefix="toffee_ng_ms_"), "ms.cir")
     with open(path, "w") as f:
@@ -97,12 +103,12 @@ async def test_mixed_signal_simulator_with_ngspice():
         mapping.add_digital("vin_ctrl", PortDirection.OUT)
         mapping.add_analog("V1", PortDirection.IN)
         mapping.d2a("vin_ctrl", "V1", scale=1.8)
-        ms = MixedSignalSimulator(
-            sim, dut, mapping,
+        ms = MixedSignalOrchestrator(
+            dut, sim, mapping,
             step_strategy=StepExactStrategy(max_step=1e-9),
         )
         ms.advance_to(5e-9)
-        vout = ms.read("V(vout)")
+        vout = sim.read("V(vout)")
         assert vout > 1.0, f"Expected vout > 1.0V, got {vout}"
     finally:
         sim.finish()

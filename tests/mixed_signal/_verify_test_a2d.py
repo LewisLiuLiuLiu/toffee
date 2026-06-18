@@ -1,4 +1,4 @@
-"""Verification tests for PortMapping A2D + MixedSignalSimulator A2D logic.
+"""Verification tests for PortMapping A2D + MixedSignalOrchestrator A2D logic.
 
 These tests are written by the independent verifier to confirm:
 1. No old API names (bridge, BridgeSpec, etc.) remain in public API
@@ -15,7 +15,7 @@ import toffee_test
 from toffee.mixed_signal.port_mapping import (
     PortMapping, PortDirection, D2ASpec, D2AParamSpec, A2DSpec,
 )
-from toffee.mixed_signal.mixed_signal_simulator import MixedSignalSimulator
+from toffee.mixed_signal.mixed_signal_orchestrator import MixedSignalOrchestrator
 
 
 # --- Helpers ---
@@ -25,12 +25,21 @@ class SimpleDut:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+    def Step(self):
+        pass
+
+    def RefreshComb(self):
+        pass
+
 
 class FakeAnalog:
     """Minimal analog simulator fake."""
     def __init__(self):
         self.time = 0.0
         self._reads = {}
+
+    def step_time(self, dt):
+        self.time += dt
 
     def simulateUntil(self, t):
         self.time = t
@@ -117,7 +126,7 @@ async def test_threshold_exact_boundary():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9)
 
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     sim.advance_to(1e-9)
     assert dut.comp_out == 1  # >= threshold
 
@@ -148,7 +157,7 @@ async def test_yadc_value_not_thresholded():
     # threshold=2.0: if code mistakenly does `1 >= 2.0`, gives 0
     mapping.a2d("v_cmp", "comp_out", threshold=2.0, yadc_device="YADC1")
 
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     sim.advance_to(1e-9)
     assert dut.comp_out == 1  # YADC state=1, used directly
 
@@ -176,7 +185,7 @@ async def test_invert_safe_with_nonbinary_yadc():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", invert=True, yadc_device="Y1")
 
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     sim.advance_to(1e-9)
     assert dut.comp_out == 0  # 2 is truthy → inverted = 0 (not -1)
 
@@ -198,7 +207,7 @@ async def test_invert_zero_becomes_one():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", invert=True, yadc_device="Y1")
 
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     sim.advance_to(1e-9)
     assert dut.comp_out == 1  # 0 is falsy → inverted = 1
 
@@ -226,7 +235,7 @@ async def test_multiple_yadc_devices():
     mapping.a2d("v_a", "pin_a", yadc_device="YADC_A")
     mapping.a2d("v_b", "pin_b", yadc_device="YADC_B")
 
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     sim.advance_to(1e-9)
 
     assert dut.pin_a == 1  # YADC_A state=1
@@ -252,7 +261,7 @@ async def test_yadc_failure_falls_back_to_threshold():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9, yadc_device="YADC1")
 
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     sim.advance_to(1e-9)
     assert dut.comp_out == 1  # fallback: 1.5 >= 0.9
 
@@ -265,7 +274,7 @@ async def test_step_time_negative_raises():
     dut = SimpleDut()
     analog = FakeAnalog()
     mapping = PortMapping()
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     with pytest.raises(ValueError, match="positive dt"):
         sim.step_time(-1e-9)
 
@@ -276,7 +285,7 @@ async def test_step_time_zero_raises():
     dut = SimpleDut()
     analog = FakeAnalog()
     mapping = PortMapping()
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     with pytest.raises(ValueError, match="positive dt"):
         sim.step_time(0)
 
@@ -294,6 +303,12 @@ async def test_a2d_writes_to_pin_value_attr():
         def __init__(self):
             self.comp_out = Pin()
 
+        def Step(self):
+            pass
+
+        def RefreshComb(self):
+            pass
+
     dut = DutWithPin()
     analog = FakeAnalog()
     analog._reads["v_cmp"] = 1.5
@@ -303,6 +318,6 @@ async def test_a2d_writes_to_pin_value_attr():
     mapping.add_analog("v_cmp", PortDirection.OUT)
     mapping.a2d("v_cmp", "comp_out", threshold=0.9)
 
-    sim = MixedSignalSimulator(analog, dut, mapping)
+    sim = MixedSignalOrchestrator(dut, analog, mapping)
     sim.advance_to(1e-9)
     assert dut.comp_out.value == 1

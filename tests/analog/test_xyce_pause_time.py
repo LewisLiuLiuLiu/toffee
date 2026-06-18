@@ -49,6 +49,7 @@ def _make_sim():
     sim._xyce = FakeXyceInterface()
     sim._clock_event = asyncio.Event()
     sim._current_time = 0.0
+    sim._prev_adc_states = {}
     sim._original_netlist = ""
     sim._netlist_path = ""
     sim._temp_dir = None
