@@ -11,5 +11,4 @@ class AnalogEnv(Env):
         self.simulator = simulator
 
     def finish(self):
-        if hasattr(self.simulator, "finish"):
-            self.simulator.finish()
+        self.simulator.finish()

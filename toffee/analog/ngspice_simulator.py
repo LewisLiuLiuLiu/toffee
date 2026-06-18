@@ -20,6 +20,7 @@ from collections import deque
 from pathlib import Path
 
 from ..simulator import Simulator
+from .analog_backend import AnalogBackend
 from .ngspice_raw_parser import NgSpiceRawParser
 
 
@@ -373,7 +374,7 @@ def _init_ngspice_lib(lib_path: str | None) -> ctypes.CDLL:
     return lib
 
 
-class NgSpiceSimulator(Simulator):
+class NgSpiceSimulator(Simulator, AnalogBackend):
     """
     Phase 1 ngspice backend using ctypes + lazy sync.
 
@@ -436,9 +437,14 @@ class NgSpiceSimulator(Simulator):
         with self._trigger_lock:
             self._async_triggers[node_name] = {"threshold": threshold, "armed": True}
 
+    # -- AnalogBackend aliases --
+    register_trigger = add_async_trigger
+
     def remove_async_trigger(self, node_name: str):
         with self._trigger_lock:
             self._async_triggers.pop(node_name, None)
+
+    unregister_trigger = remove_async_trigger
 
     def _ensure_loop(self) -> None:
         """Lazily capture the running asyncio loop (not safe in __init__)."""
@@ -479,13 +485,20 @@ class NgSpiceSimulator(Simulator):
         if time > self._current_time:
             self.step_time(time - self._current_time)
 
-    async def next_event(self) -> str:
-        """Event-driven step: advance ngspice by 1ns without blocking asyncio."""
+    async def next_event(self, target_time: float | None = None) -> str:
+        """Event-driven step: advance ngspice to *target_time* without blocking asyncio.
+
+        If *target_time* is given, ngspice is advanced to that absolute time.
+        Otherwise the default step of 1 ns from the current time is used.
+        """
         self._ensure_loop()
         if not self._bg_running:
             self._start_lazy_transient()
 
-        target = self._current_time + 1e-9
+        if target_time is not None:
+            target = target_time
+        else:
+            target = self._current_time + 1e-9
         self._next_sync_time = target
         self._sync_event.clear()
         self._resume_event.set()
@@ -499,6 +512,8 @@ class NgSpiceSimulator(Simulator):
             )
 
         self._current_time = self._spice_time
+        if self._last_error is not None:
+            raise self._last_error
         # Explicitly do NOT call tick() — __event_loop handles it
 
         with self._event_lock:
@@ -736,14 +751,17 @@ class NgSpiceSimulator(Simulator):
             self._vsrc_values[name] = float(voltage)
             self._vsrc_values[name.lower()] = float(voltage)
 
+    # -- AnalogBackend alias --
+    set_source = set_vsrc
+
     # ------------------------------------------------------------------ #
-    # MixedSignalSimulator compatibility API
+    # Mixed-signal compatibility API
     # ------------------------------------------------------------------ #
     def simulateUntil(self, time: float) -> tuple[int, float]:
         """Advance to *time* and return ``(status, actual_time)``.
 
         Provides the same interface as ``XyceSimulator.simulateUntil()``
-        so that ``MixedSignalSimulator.advance_to()`` works with ngspice.
+        so that lockstep advance_to paths work with ngspice.
         """
         if time > self._current_time:
             self.step_time(time - self._current_time)
@@ -771,6 +789,9 @@ class NgSpiceSimulator(Simulator):
         cmd = f"alterparam {name} = {value}"
         ret = self._lib.ngSpice_Command(cmd.encode("utf-8"))
         return 1 if ret == 0 else 0
+
+    # -- AnalogBackend alias --
+    set_parameter = setCircuitParameter
 
     # ------------------------------------------------------------------ #
     # Data access
@@ -841,3 +862,8 @@ class NgSpiceSimulator(Simulator):
         if _active_sim_id == self._user_id:
             _active_sim_id = None
         shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+    @property
+    def current_time(self) -> float:
+        """Current simulation time in seconds (public read-only)."""
+        return self._current_time
